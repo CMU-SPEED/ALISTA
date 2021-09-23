@@ -15,6 +15,199 @@ import numpy as np
 
 from utils.data import bsd500_cs_inputs
 
+"""*****************************************************************************
+More functions for compressive sensing
+*****************************************************************************"""
+def setup_input_coms(test, p, tbs, vbs, fixval, supp_prob, SNR,
+                   magdist, **distargs):
+    M, N = p.A.shape
+    with tf.name_scope('input'):
+        if supp_prob is None:
+            supp_prob = p.pnz
+        prob_ = tf.constant(value=supp_prob, dtype=tf.float32, name='prob')
+
+        """Sample supports."""
+        supp_ = tf.random_uniform(shape=(N, tbs), minval=0.0, maxval=1.0,
+                                  name='supp')
+        supp_ = tf.to_float(supp_ <= prob_)
+
+        if not test:
+            supp_val_ = tf.random_uniform(shape=(N, vbs),
+                                          minval=0.0, maxval=1.0,
+                                          dtype=tf.float32, name='supp_val')
+            supp_val_ = tf.to_float(supp_val_ <= prob_)
+
+        """Sample magnitudes."""
+        if magdist == 'normal':
+            mag_real_ = tf.random_normal(shape=(N, tbs),
+                                    mean=distargs['mean'],
+                                    stddev=distargs['std'],
+                                    dtype=tf.float32,
+                                    name='mag')
+            mag_imag_ = tf.random_normal(shape=(N, tbs),
+                                         mean=distargs['mean'],
+                                         stddev=distargs['std'],
+                                         dtype=tf.float32,
+                                         name='mag')
+            if not test:
+                mag_val_real_ = tf.random_normal (shape=(N, vbs),
+                                             mean=distargs ['mean'],
+                                             stddev=distargs ['std'],
+                                             dtype=tf.float32,
+                                             name='mag')
+                mag_val_imag_ = tf.random_normal(shape=(N, vbs),
+                                                 mean=distargs['mean'],
+                                                 stddev=distargs['std'],
+                                                 dtype=tf.float32,
+                                                 name='mag')
+        elif magdist == 'bernoulli':
+            mag_ = (tf.random_uniform(shape=(N, tbs), minval=0.0, maxval=1.0,
+                                      dtype=tf.float32)
+                    <= distargs['p'])
+            mag_ = (tf.to_float (mag_) * distargs ['v0'] +
+                    tf.to_float (tf.logical_not (mag_)) * distargs ['v1'])
+
+            if not test:
+                mag_val_ = (tf.random_uniform (shape=(N, vbs),
+                                               minval=0.0, maxval=1.0,
+                                               dtype=tf.float32)
+                            <= distargs ['p'])
+                mag_val_ = (tf.to_float (mag_val_)
+                                * distargs ['v0'] +
+                            tf.to_float (tf.logical_not (mag_val_))
+                                * distargs ['v1'])
+
+
+        """Get sparse codes. (real and image part are seperated"""
+        x_real_ = supp_ * mag_real_
+        x_imag_ = supp_ * mag_imag_
+        x_ = tf.concat([x_real_, x_imag_], 0)
+
+        """Measure sparse codes."""
+        kA_real_ = tf.constant (value=p.A.real, dtype=tf.float32)
+        kA_imag_ = tf.constant(value=p.A.imag, dtype=tf.float32)
+        y_real_  = tf.matmul (kA_real_, x_real_) - tf.matmul(kA_imag_, x_imag_)
+        y_imag_ = tf.matmul(kA_real_, x_imag_) + tf.matmul(kA_imag_, x_real_)
+        y_ = tf.concat([y_real_, y_imag_], 0)
+
+        """Add noise with SNR."""
+        std_ = (tf.sqrt (tf.nn.moments (y_, axes=[0], keep_dims=True) [1])
+                    * np.power (10.0, -SNR/20.0))
+        noise_ = tf.random_normal (shape=tf.shape (y_), stddev=std_,
+                                   dtype=tf.float32, name='noise')
+        y_ = y_ + noise_
+
+        if not test and fixval:
+            x_val_real_ = supp_val_ * mag_val_real_
+            x_val_imag_ = supp_val_ * mag_val_imag_
+            x_val_ = tf.concat([x_val_real_, x_val_imag_], 0)
+            y_val_real_ = tf.matmul (kA_real_, x_val_real_) - tf.matmul(kA_imag_, x_val_imag_)
+            y_val_imag_ = tf.matmul(kA_real_, x_val_imag_) + tf.matmul(kA_imag_, x_val_real_)
+            y_val_ = tf.concat([y_val_real_, y_val_imag_], 0)
+
+            std_val_ = (
+                tf.sqrt (tf.nn.moments (y_val_, axes=[0], keep_dims=True) [1])
+                * np.power (10.0, -SNR/20.0))
+            noise_val_ = tf.random_normal (shape=tf.shape (y_val_),
+                                           stddev=std_val_, dtype=tf.float32,
+                                           name='noise_val')
+            y_val_ = y_val_ + noise_val_
+            if fixval:
+                x_val_ = tf.get_variable (name='label_val', initializer=x_val_)
+                y_val_ = tf.get_variable (name='input_val', initializer=y_val_)
+
+        """In the order of `input_, label_, input_val_, label_val_`."""
+        if not test:
+            print('Finish set up the training data once')
+            return y_real_, y_imag_, x_real_, x_imag_,  y_val_real_, y_val_imag_, x_val_real_, x_val_imag_
+
+        else:
+            return y_real_, y_imag_, x_real_, x_imag_
+
+def setup_coms_training (model, y_real_, y_imag_, x_real_, x_imag_,  y_val_real_, y_val_imag_, x_val_real_, x_val_imag_, x0_real_, x0_image_,
+                       init_lr, decay_rate, lr_decay):
+    """TODO: Docstring for setup_training.
+
+    :y_: Tensorflow placeholder or tensor.
+    :x_: Tensorflow placeholder or tensor.
+    :y_val_: Tensorflow placeholder or tensor.
+    :x_val_: Tensorflow placeholder or tensor.
+    :x0_: TensorFlow tensor. Initial estimation of feature maps.
+    :init_lr: TODO
+    :decay_rate: TODO
+    :lr_decay: TODO
+    :returns:
+        :training_stages: list of training stages
+
+    """
+
+    """Inference."""
+    xhs_     = model.inference (y_real_, y_imag_, x0_real_, x0_image_)
+    xhs_val_ = model.inference (y_val_real_, y_val_imag_, x0_real_, x0_image_)
+
+    x_ = tf.concat([x_real_, x_imag_], 0)
+    x_val_ = tf.concat([x_val_real_, x_val_imag_], 0)
+    nmse_denom_     = tf.nn.l2_loss (x_)
+    nmse_denom_val_ = tf.nn.l2_loss (x_val_)
+
+
+    # start setting up training
+    training_stages = []
+
+    lrs = [init_lr * decay for decay in lr_decay]
+
+    # setup lr_multiplier dictionary
+    # learning rate multipliers of each variables
+    lr_multiplier = dict()
+    for var in tf.trainable_variables():
+        lr_multiplier[var.op.name] = 1.0
+
+    # initialize train_vars list
+    # variables which will be updated in next training stage
+    train_vars = []
+
+    for t in range (model._T):
+        # layer information for training monitoring
+        layer_info = "{scope} T={time}".format (scope=model._scope, time=t+1)
+
+        # set up loss_ and nmse_
+        loss_ = tf.nn.l2_loss (xhs_ [t+1] - x_)
+        nmse_ = loss_ / nmse_denom_
+        loss_val_ = tf.nn.l2_loss (xhs_val_ [t+1] - x_val_)
+        nmse_val_ = loss_val_ / nmse_denom_val_
+
+        var_list = tuple([var for var in model.vars_in_layer [t]
+                               if var not in train_vars])
+
+        # First only train the variables in the `var_list` in current layer.
+        op_ = tf.train.AdamOptimizer (init_lr).minimize (loss_,
+                                                         var_list=var_list)
+        training_stages.append ((layer_info, loss_, nmse_,
+                                 loss_val_, nmse_val_, op_, var_list))
+
+        for var in var_list:
+            train_vars.append (var)
+
+        # Train all variables in current and former layers with decayed
+        # learning rate.
+        for lr in lrs:
+            op_ = get_train_op (loss_, train_vars, lr, lr_multiplier)
+            training_stages.append ((layer_info + ' lr={}'.format (lr),
+                                     loss_,
+                                     nmse_,
+                                     loss_val_,
+                                     nmse_val_,
+                                     op_,
+                                     tuple (train_vars), ))
+
+        # decay learning rates for trained variables
+        for var in train_vars:
+            lr_multiplier [var.op.name] *= decay_rate
+
+    return training_stages
+"""*****************************************************************************
+Generating Input for LISTA type networks.
+*****************************************************************************"""
 
 def setup_input_sc(test, p, tbs, vbs, fixval, supp_prob, SNR,
                    magdist, **distargs):
@@ -1007,7 +1200,7 @@ def load_trainable_variables (sess, filename):
         filename = filename + '.npz'
     if not os.path.exists (filename):
         raise ValueError (filename + ' not exists')
-
+    print('Load model from ' + str(filename))
     tv = dict ([(str(v.name), v) for v in tf.trainable_variables ()])
     for k, d in np.load (filename).items ():
         if k in tv:

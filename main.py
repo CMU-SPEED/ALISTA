@@ -21,7 +21,7 @@ from config import get_config
 import utils.prob as problem
 import utils.data as data
 import utils.train as train
-
+from scipy import linalg
 import numpy as np
 import tensorflow as tf
 try :
@@ -34,6 +34,17 @@ except Exception as e :
 def setup_model(config , **kwargs) :
     untiedf = 'u' if config.untied else 't'
     coordf = 'c' if config.coord  else 's'
+
+    """----------------- add the LISTA model for complex case"""
+    if config.net == 'LISTA_complex':
+        """LISTA complex"""
+        config.model = ("LISTA_complex_T{T}_lam{lam}_{untiedf}_{coordf}_{exp_id}"
+                        .format(T=config.T, lam=config.lam, untiedf=untiedf,
+                                coordf=coordf, exp_id=config.exp_id))
+        from models.LISTA_complex import LISTA_complex
+        model = LISTA_complex(kwargs['A'], T=config.T, lam=config.lam,
+                      untied=config.untied, coord=config.coord,
+                      scope=config.scope)
 
     if config.net == 'LISTA' :
         """LISTA"""
@@ -266,6 +277,9 @@ def run_train(config) :
         run_encoder_train(config)
     elif config.task_type == "robust":
         run_robust_train(config)
+    # complex compressive sensing task
+    elif config.task_type == "coms":
+        run_coms_train(config)
 
 
 def run_sc_train(config) :
@@ -698,6 +712,10 @@ def run_test (config):
         run_denoise_test(config)
     elif config.task_type == "robust":
         run_robust_test(config)
+    elif config.task_type == "coms":
+        run_coms_test(config)
+    elif config.task_type == "ista":
+        run_ls_ista_test(config)
 
 def run_sc_test (config) :
     """
@@ -709,15 +727,18 @@ def run_sc_test (config) :
         raise ValueError ("Problem file not found.")
     else:
         p = problem.load_problem (config.probfn)
+        # print('#########raise the problem ' + str(config.probfn) + '##########') ## test the path
 
     """Load testing data."""
-    xt = np.load (config.xtest)
+    xt = np.load (config.xtest) ## shape [500,1000], each column is a x_i
+
     """Set up input for testing."""
     config.SNR = np.inf if config.SNR == 'inf' else float (config.SNR)
     input_, label_ = (
         train.setup_input_sc (config.test, p, xt.shape [1], None, False,
                               config.supp_prob, config.SNR,
                               config.magdist, **config.distargs))
+
 
     """Set up model."""
     model = setup_model (config , A=p.A)
@@ -748,6 +769,7 @@ def run_sc_test (config) :
             # nmse:
             loss = np.sum (np.square (xh - xt))
             nmse_dB = 10.0 * np.log10 (loss / nmse_denom)
+            print(loss)
             print (nmse_dB)
             lnmse.append (nmse_dB)
 
@@ -1072,6 +1094,239 @@ def run_robust_test(config):
 
     # end of run_robust_test
 
+############################################################
+#######################   Compressive sensing   #########################
+############################################################
+def run_coms_train(config):
+    """
+    Training model
+    :param config:
+    :return:
+    """
+
+    """Load problem."""
+    if not os.path.exists(config.probfn):
+        raise ValueError("Problem file not found.")
+    else:
+        p = problem.load_problem(config.probfn)
+
+    """Set up model."""
+    model = setup_model(config, A=p.A)
+
+    """Set up input."""
+    config.SNR = np.inf if config.SNR == 'inf' else float(config.SNR)
+    y_real_, y_imag_, x_real_, x_imag_, y_val_real_, y_val_imag_, x_val_real_, x_val_imag_ = (
+        train.setup_input_coms(
+            config.test, p, config.tbs, config.vbs, config.fixval,
+            config.supp_prob, config.SNR, config.magdist, **config.distargs))
+
+    """Set up training."""
+    stages = train.setup_coms_training(
+        model, y_real_, y_imag_, x_real_, x_imag_,  y_val_real_, y_val_imag_, x_val_real_, x_val_imag_, None, None,
+        config.init_lr, config.decay_rate, config.lr_decay)
+
+    tfconfig = tf.ConfigProto(allow_soft_placement=True)
+    tfconfig.gpu_options.allow_growth = True
+    with tf.Session(config=tfconfig) as sess:
+        # graph initialization
+        sess.run(tf.global_variables_initializer())
+
+        # start timer
+        start = time.time()
+
+        # train model
+        model.do_training(sess, stages, config.modelfn, config.scope,
+                          config.val_step, config.maxit, config.better_wait)
+
+        # end timer
+        end = time.time()
+        elapsed = end - start
+        print("elapsed time of training = " + str(timedelta(seconds=elapsed)))
+
+    # end of run_sc_train
+
+def run_coms_test(config) :
+    """
+    Test model.
+    """
+
+    """Load problem."""
+    if not os.path.exists(config.probfn):
+        raise ValueError("Problem file not found.")
+    else:
+        p = problem.load_problem(config.probfn)
+        # print('#########raise the problem ' + str(config.probfn) + '##########') ## test the path
+
+    """Load testing data."""
+    data = np.load('./data/xtest_n512_p01.npz')
+    xt = data['x']
+    y = data['y']  ## shape [N, num], each column is a x_i: need to be updated
+
+    """Set up input for testing."""
+    config.SNR = np.inf if config.SNR == 'inf' else float(config.SNR)
+    input_real_, input_imag_, label_real_, label_imag_ = (
+        train.setup_input_coms(config.test, p, xt.shape[1], None, False,
+                             config.supp_prob, config.SNR,
+                             config.magdist, **config.distargs))
+
+    """Set up model."""
+    model = setup_model(config, A=p.A)
+    xhs_ = model.inference(input_real_, input_imag_, None, None)
+
+    """Create session and initialize the graph."""
+    tfconfig = tf.ConfigProto(allow_soft_placement=True)
+    tfconfig.gpu_options.allow_growth = True
+    with tf.Session(config=tfconfig) as sess:
+        # graph initialization
+        sess.run(tf.global_variables_initializer())
+        # load model
+        model.load_trainable_variables(sess, config.modelfn)
+
+        nmse_denom = np.sum(np.square(np.abs(xt)))
+        supp_gt = xt != 0
+
+        lnmse = []
+        lspar = []
+        lsperr = []
+        lflspo = []
+        lflsne = []
+        xhs_save= []
+
+        # test model
+        for xh_ in xhs_:
+            xh = sess.run(xh_, feed_dict={label_real_: xt.real, label_imag_: xt.imag})
+
+            # nmse:
+            loss = np.sum(np.square(xh - np.concatenate([xt.real, xt.imag], 0)))
+            nmse_dB = 10.0 * np.log10(loss / nmse_denom)
+            print(loss)
+            print(nmse_dB)
+            lnmse.append(nmse_dB)
+
+            xhs_save.append(xh)
+
+            # supp = xh != 0.0
+            # # intermediate sparsity
+            # spar = np.sum(supp, axis=0)
+            # lspar.append(spar)
+            #
+            # # support error
+            # sperr = np.logical_xor(supp, supp_gt)
+            # lsperr.append(np.sum(sperr, axis=0))
+            #
+            # # false positive
+            # flspo = np.logical_and(supp, np.logical_not(supp_gt))
+            # lflspo.append(np.sum(flspo, axis=0))
+            #
+            # # false negative
+            # flsne = np.logical_and(supp_gt, np.logical_not(supp))
+            # lflsne.append(np.sum(flsne, axis=0))
+
+    print(np.asarray(xhs_))
+    res = dict(nmse=np.asarray(lnmse),
+               xtrue=xt,
+               xhs_=np.asarray(xhs_save))
+
+    np.savez(config.resfn, **res)
+    print('Finish save the file of results')
+    # end of test
+
+
+
+
+def run_ls_ista_test(config) :
+    """
+    Test the algorithm Least squares + ISTA
+    :param config:
+    :return:
+    """
+    """
+        Test model.
+        """
+
+    """Load problem."""
+    print(config.probfn)
+    if not os.path.exists(config.probfn):
+        raise ValueError("Problem file not found.")
+    else:
+        p = problem.load_problem(config.probfn)
+        # print('#########raise the problem ' + str(config.probfn) + '##########') ## test the path
+
+    """Load testing data."""
+    data = np.load('./data/xtest_n512_p01.npz')
+    xt = data['x']
+    y = data['y']
+
+
+
+    """ Test ISTA"""
+    lam_ista = 0.25
+    maxit = 5000
+    ista(p.A, y, lam_ista, maxit, xt, config)
+
+    """ Test Least square"""
+    x_ls = np.linalg.pinv(p.A) @ y
+
+    nmse_denom = np.sum(np.square(np.abs(xt)))
+    loss = np.sum(np.square(np.abs(x_ls - xt)))
+    nmse_dB = 10.0 * np.log10(loss / nmse_denom)
+    print('The final reseult of Least square is \'loss\':', loss, '\'nmse\': ', nmse_dB)
+
+    # save the results
+    config.resfn = os.path.join(config.resbase, 'least_square')
+    res = dict(nmse=nmse_dB,
+               loss=loss,
+               xtrue=xt,
+               xestimate=x_ls)
+    np.savez(config.resfn, **res)
+
+
+
+def soft_thresh(x, l):
+    zero_eps = 1e-10
+    return np.divide(x, np.maximum(np.abs(x), zero_eps)) * np.maximum(np.abs(x) - l, 0.)
+
+
+def ista(A, b, l, maxit, xt, config):
+    # initial x
+    x = np.zeros((A.shape[1],xt.shape[1]), dtype=complex)
+    L = linalg.norm(A) ** 2  # Lipschitz constant
+    print('The biggest eigenvalue L is ' + str(L))
+    time0 = time.time()
+
+    lnmse = []
+    times = []
+    pobj = []
+    nmse_denom = np.sum(np.square(np.abs(xt)))
+
+    for _ in range(maxit):
+        x = soft_thresh(x + np.dot(A.conj().T, b - A.dot(x)) / L, l / L)
+        # nmse:
+        loss = np.sum(np.square(np.abs(x - xt)))
+        nmse_dB = 10.0 * np.log10(loss / nmse_denom)
+        lnmse.append(nmse_dB)
+
+        # loss:
+        times.append(time.time() - time0)
+        this_pobj = 0.5 * linalg.norm(A.dot(x) - b) ** 2 + l * linalg.norm(x, 1)
+        pobj.append(this_pobj)
+
+        # print(loss)
+        # print(nmse_dB)
+        # print(this_pobj)
+        print("Result in iteration ", _, "is \'Loss\':", loss, "\'nmse\':", nmse_dB, "\'obejctive\':", this_pobj)
+
+    res = dict(nmse=np.asarray(lnmse),
+               loss=np.asarray(pobj),
+               costtime=np.asarray(times),
+               xtrue=xt,
+               xestimate=x)
+
+    config.resfn = os.path.join(config.resbase, 'ista')
+    np.savez(config.resfn, **res)
+    return x, pobj, times
+
+
 
 ############################################################
 #######################    Main    #########################
@@ -1083,11 +1338,15 @@ def main ():
     # set visible GPUs
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpu
 
+    print('Now the mode is ' + str(config.test) + ' (False is training/True is testing)')
     if config.test:
         run_test (config)
     else:
         run_train (config)
     # end of main
+
+
+
 
 if __name__ == "__main__":
     main ()

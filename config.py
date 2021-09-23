@@ -301,7 +301,7 @@ def get_config():
 
     """Experiments and results base folder."""
     if config.prob_folder == "":
-        if config.task_type in ['sc', "encoder", 'robust']:
+        if config.task_type in ['coms', 'ista', 'sc', "encoder", 'robust']:
             config.prob_folder = ('m{}_n{}_k{}_p{}_s{}'.format(
                 config.M, config.N, config.con_num, config.pnz, config.SNR))
         elif config.task_type == 'cs':
@@ -334,6 +334,10 @@ def get_config():
     Data folder, dictionary and sensing file for compressive sensing task.
     """
     if config.task_type == 'sc':
+        setattr(config, 'probfn' , os.path.join(config.expbase, config.prob))
+    elif config.task_type == 'coms':
+        setattr(config, 'probfn' , os.path.join(config.expbase, config.prob))
+    elif config.task_type == 'ista':
         setattr(config, 'probfn' , os.path.join(config.expbase, config.prob))
     # Data folder, dictionary and sensing matrix location for cs experiments.
     elif config.task_type == 'cs' and not config.test:
@@ -383,7 +387,7 @@ def get_config():
         config.denoise_std = config.sigma / 255.0
 
     """Support and magnitudes distribution settings for sparse coding task."""
-    if config.task_type == 'sc':
+    if config.task_type == 'sc' or config.task_type == 'coms':
         # supp_prob
         if not config.supp_prob is None:
             try:
@@ -400,6 +404,8 @@ def get_config():
             config.distargs = dict(p=config.magbp,
                                    v0=config.magbv0,
                                    v1=config.magbv1)
+
+
 
     return config, unparsed
 

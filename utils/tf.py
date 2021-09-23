@@ -37,6 +37,7 @@ def shrink(input_, theta_):
     return tf.sign(input_) * tf.maximum( tf.abs(input_) - theta_, 0.0 )
 
 
+
 def shrink_free(input_, theta_):
     """
     Soft Shrinkage function without the constraint that the thresholds must be

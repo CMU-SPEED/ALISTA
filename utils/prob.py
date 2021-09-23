@@ -10,11 +10,17 @@ date  : 2019-02-23
 Define problem class that is used experiments.
 """
 
+"""
+Add function get_dft_A(M, N) and adjust the random Gaussian A to partial Fourier Matrix
+"""
+
 import os
 import argparse
 import numpy as np
 import numpy.linalg as la
 from scipy.io import savemat, loadmat
+from scipy.linalg import dft
+import math
 
 def str2bool(v):
     return v.lower() in ('true', '1')
@@ -57,7 +63,7 @@ class Problem(object):
             s = np.logspace (0, np.log10 (1 / con_num), self.M)
             A = np.dot (U * (s * np.sqrt(self.N) / la.norm(s)), V).astype (np.float32)
         if col_normalized:
-            A = A / np.sqrt(np.sum(np.square(A), axis=0, keepdims=True))
+            A = A / np.sqrt(np.sum(np.square(np.abs(A)), axis=0, keepdims=True))
         # self.x_ = tf.placeholder( tf.float32, (self.N, None), name='x' )
         # self.y_ = tf.placeholder( tf.float32, (self.M, None), name='y' )
 
@@ -188,6 +194,8 @@ def random_A(M, N, con_num=0, col_normalized=True):
     A = np.random.normal( scale=1.0/np.sqrt(M), size=(M,N) ).astype(np.float32)
     return A
 
+
+
 def setup_problem (A, L, pnz, SNR, con_num, col_normalized):
     prob = Problem()
     prob.build_prob(A, L, pnz, SNR, con_num, col_normalized)
@@ -230,6 +238,36 @@ parser.add_argument(
     "-pfn", "--prob_file", type=str, default="prob.npz",
     help="The (base) file name of problem file.")
 
+##--------------------- Compressive sensing ---------------------
+def get_dft_A(M, N):
+    F = dft(N)
+    random_indices = np.random.choice(F.shape[0], size=M, replace=False)
+    A = F[random_indices,:]
+    A = A/math.sqrt(M)
+    return A
+
+## function for generating testing data:
+
+def generate_data(p, batch_size):
+    """
+
+    :param p:
+    :param batch_size:
+    :return:
+    """
+    now_A = p.A
+    supp_prob = p.pnz
+    supp_ = np.random.uniform(0.0, 1.0, (p.N, batch_size))
+    supp_ = (supp_ <p.pnz).astype(float)
+    # print(supp_)
+    magn_ = np.random.random((p.N, batch_size)) + np.random.random((p.N, batch_size)) * 1j
+    x = np.multiply(supp_, magn_)
+    y = p.A @ x
+    np.savez('./data/xtest_n512_p01.npz', x=x, y=y)
+    return y, x
+
+##--------------------- Compressive sensing ---------------------
+
 if __name__ == "__main__":
     config, unparsed = parser.parse_known_args()
     if not config.load_A is None:
@@ -241,8 +279,13 @@ if __name__ == "__main__":
             raise ValueError("invalid file {}".format(config.load_A))
         config.M, config.N = A.shape
     else:
-        A = np.random.normal(scale=1.0/np.sqrt(config.M),
-                             size=(config.M, config.N)).astype(np.float32)
+        # ## random Gaussian matrix A
+        # A = np.random.normal(scale=1.0/np.sqrt(config.M),
+        #                      size=(config.M, config.N)).astype(np.float32)
+
+        ## use partial DFT matrix A
+        A = get_dft_A(config.M, config.N)
+
     prob_desc = ('m{}_n{}_k{}_p{}_s{}'.format(
         config.M, config.N, config.con_num, config.pnz, config.SNR))
     prob_folder = os.path.join(config.exp_folder, prob_desc)
@@ -260,5 +303,9 @@ if __name__ == "__main__":
             raise ValueError("invalid SNR. use 'inf' or a float number.")
     p = setup_problem(A, config.L, config.pnz, SNR, config.con_num,
                       config.col_normalized)
+
+    generate_data(p, 1000)
     p.save(out_file, ftype="npz")
+
+
 

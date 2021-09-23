@@ -32,7 +32,7 @@ class LISTA (LISTA_base):
         :scope  : String. Scope name of the model.
         """
         self._A   = A.astype (np.float32)
-        self._T   = T
+        self._T   = T # layer
         self._lam = lam
         self._M   = self._A.shape [0]
         self._N   = self._A.shape [1]
