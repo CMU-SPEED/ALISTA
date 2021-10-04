@@ -39,7 +39,7 @@ net_arg.add_argument(
     help="Percent of entries to be selected as support in each layer.")
 net_arg.add_argument(
     '-maxp', '--max_percent', type=float, default=0.0,
-    help="Maximum percentage of entries to be selectedas support in each layer.")
+    help="Maximum percentage of entries to be selected as support in each layer.")
 net_arg.add_argument(
     '-l', '--lam', type=float, default=0.4,
     help="Initial lambda in LISTA solvers.")
@@ -65,10 +65,10 @@ net_arg.add_argument(
 # Problem arguments
 prob_arg = parser.add_argument_group('prob')
 prob_arg.add_argument(
-    '-M', '--M', type=int, default=250,
+    '-M', '--M', type=int, default=44032,
     help="Dimension of measurements.")
 prob_arg.add_argument(
-    '-N', '--N', type=int, default=500,
+    '-N', '--N', type=int, default=88046,
     help="Dimension of sparse codes.")
 prob_arg.add_argument(
     '-F', '--F', type=int, default=256,

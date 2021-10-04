@@ -1081,6 +1081,7 @@ def main ():
     # parse configuration
     config, _ = get_config()
     # set visible GPUs
+    print("Num GPUs Available: ", len(tf.config.list_physical_devices('GPU')))
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpu
 
     if config.test:

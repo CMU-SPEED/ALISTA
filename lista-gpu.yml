@@ -1,0 +1,4 @@
+name: lista-gpu
+dependencies:
+     - tensorflow-gpu==1.9
+     - python

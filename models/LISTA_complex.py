@@ -18,6 +18,16 @@ from utils.tf import shrink
 from models.LISTA_base import LISTA_base
 import os
 
+import time
+class Timer:    
+    def __enter__(self):
+        self.start = time.time()
+        return self
+
+    def __exit__(self, *args):
+        self.end = time.time()
+        self.interval = self.end - self.start
+
 class LISTA_complex (LISTA_base):
 
     """
@@ -118,6 +128,8 @@ class LISTA_complex (LISTA_base):
 
     def inference (self, y_real_, y_imag_, x0_real_ = None, x0_imag_=None):
         xhs_  = [] # collection of the regressed sparse codes
+
+
         if x0_real_ is None:
             batch_size = tf.shape (y_real_) [-1]
             xh_real_ = tf.zeros (shape=(self._N, batch_size), dtype=tf.float32)
@@ -126,19 +138,34 @@ class LISTA_complex (LISTA_base):
         else:
             xh_real_ = x0_real_
             xh_imag_ = x0_imag_
+
         xhs_.append (xh_)
+        
+        
 
         with tf.variable_scope (self._scope, reuse=True) as vs:
+            
+        
             for t in range (self._T):
+
                 B_real, B_imag, W_real, W_imag, theta_ = self.vars_in_layer [t]
 
+                # print(f"B_real shape is {B_real.shape}\tB_imag shape is {B_imag.shape}")
+                # print(f"W_real shape is {W_real.shape}\tW_imag shape is {W_imag.shape}")
+                # print(f"y_real_ shape is {y_real_.shape}\ty_imag_ shape is {y_imag_.shape}")
+                # print(f"xh_real_ shape is {xh_real_.shape}\txh_imag_ shape is {xh_imag_.shape}")
+
+                # ops computed is 8mnk
                 By_real_ = tf.matmul (B_real, y_real_) - tf.matmul(B_imag, y_imag_)
                 By_imag_ = tf.matmul (B_real, y_imag_) + tf.matmul(B_imag, y_real_)
 
-                #
-                input_real = tf.matmul(W_real, xh_real_) - tf.matmul(W_imag, xh_imag_) + By_real_
+                # ops computed is 8mnk 
+                input_real = tf.matmul (W_real, xh_real_) - tf.matmul(W_imag, xh_imag_) + By_real_
                 input_imag = tf.matmul (W_real, xh_imag_) + tf.matmul(W_imag, xh_real_) + By_imag_
+
+                # do some normalization
                 xh_real_, xh_imag_ = shrink_complex (input_real, input_imag, theta_)
+
                 xh_ = tf.concat([xh_real_, xh_imag_], 0)
                 xhs_.append (xh_)
 
@@ -151,9 +178,20 @@ def shrink_complex(input_real, input_imag, theta_):
     """
     norm_eps = 1e-10
     theta_ = tf.maximum(theta_, 0.0)
-    output_real = tf.divide(input_real * tf.maximum( tf.sqrt(tf.square(input_real) + tf.square(input_imag)) - theta_, 0.0),
-                            tf.maximum(tf.sqrt(tf.square(input_real) + tf.square(input_imag)), norm_eps))
-    output_imag = tf.divide(
-        input_imag * tf.maximum(tf.sqrt(tf.square(input_real) + tf.square(input_imag)) - theta_, 0.0),
-        tf.maximum(tf.sqrt(tf.square(input_real) + tf.square(input_imag)), norm_eps))
+    sq_in_real = tf.square(input_real)
+    sq_in_imag = tf.square(input_imag)
+    distance = tf.sqrt(sq_in_real + sq_in_imag)
+
+    numer = tf.maximum(distance - theta_, 0.0)
+    denom = tf.maximum(distance, norm_eps)
+    norm_fact = tf.divide(numer, denom)
+
+    # O_r = I_r * (max(sqrt(I_r^2 + I_i^2) - theta, 0)) / 
+    #             (max(sqrt(I_r^2 + I_i^2), norm_eps))
+    output_real = input_real * norm_fact
+                           
+    # O_i = I_i * (max(sqrt(I_r^2 + I_i^2) - theta, 0)) / 
+    #             (max(sqrt(I_r^2 + I_i^2), norm_eps))
+    output_imag = input_imag * norm_fact
+
     return  output_real, output_imag

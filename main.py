@@ -1337,15 +1337,15 @@ def main ():
     config, _ = get_config()
     # set visible GPUs
     os.environ['CUDA_VISIBLE_DEVICES'] = config.gpu
+    print("Num GPUs Available: ", 1+len(tf.test.gpu_device_name()))
 
     print('Now the mode is ' + str(config.test) + ' (False is training/True is testing)')
     if config.test:
-        run_test (config)
+        with tf.device(tf.test.gpu_device_name()):
+            run_test (config)
     else:
         run_train (config)
     # end of main
-
-
 
 
 if __name__ == "__main__":
