@@ -18,15 +18,9 @@ from utils.tf import shrink
 from models.LISTA_base import LISTA_base
 import os
 
-import time
-class Timer:    
-    def __enter__(self):
-        self.start = time.time()
-        return self
-
-    def __exit__(self, *args):
-        self.end = time.time()
-        self.interval = self.end - self.start
+gemm_module = tf.load_op_library('../tf-gemm.so')
+one =  tf.complex(1.0, 0.0)
+zero = tf.complex(0.0, 0.0)
 
 class LISTA_complex (LISTA_base):
 
@@ -83,8 +77,10 @@ class LISTA_complex (LISTA_base):
         # print('The dimension N is', self._N, 'M is', self._M)
         B_real = (np.transpose (self._A.real) / self._scale).astype (np.float32)
         B_imag = (np.transpose (self._A.imag) / self._scale).astype (np.float32)
+        B = tf.complex(B_real, B_imag)
         W_real = (np.eye(self._N, dtype=np.float32) - (np.matmul (B_real, self._A.real) - np.matmul (B_imag, self._A.imag))).astype(np.float32)
         W_imag = (-np.matmul(B_real, self._A.imag) - np.matmul(B_imag, self._A.real)).astype(np.float32)
+        W = tf.complex(W_real, W_imag)
 
         with tf.variable_scope (self._scope, reuse=False) as vs:
             # constant
@@ -143,55 +139,48 @@ class LISTA_complex (LISTA_base):
         
         
 
+        y = tf.complex(y_real_, y_imag_)
+        xh = tf.complex(xh_real_, xh_imag_)
+        input_ = tf.complex(0.0, 0.0)
+
         with tf.variable_scope (self._scope, reuse=True) as vs:
             
         
             for t in range (self._T):
 
                 B_real, B_imag, W_real, W_imag, theta_ = self.vars_in_layer [t]
+                B = tf.complex(B_real, B_imag)
+                W = tf.complex(W_real, W_imag)
+                
+                # By_real_ = tf.matmul (B_real, y_real_) - tf.matmul(B_imag, y_imag_)
+                # By_imag_ = tf.matmul (B_real, y_imag_) + tf.matmul(B_imag, y_real_)
+                gemm_module.gemm(B, y, input_, one, zero)
+                
+                # input_real = tf.matmul(W_real, xh_real_) - tf.matmul(W_imag, xh_imag_) + By_real_
+                # input_imag = tf.matmul (W_real, xh_imag_) + tf.matmul(W_imag, xh_real_) + By_imag_
+                gemm_module.gemm(W, xh, input_, one, one)
 
-                # print(f"B_real shape is {B_real.shape}\tB_imag shape is {B_imag.shape}")
-                # print(f"W_real shape is {W_real.shape}\tW_imag shape is {W_imag.shape}")
-                # print(f"y_real_ shape is {y_real_.shape}\ty_imag_ shape is {y_imag_.shape}")
-                # print(f"xh_real_ shape is {xh_real_.shape}\txh_imag_ shape is {xh_imag_.shape}")
+                xh = shrink_complex (input_, theta_)
+                # xh_ = tf.concat([xh_real_, xh_imag_], 0)
 
-                # ops computed is 8mnk
-                By_real_ = tf.matmul (B_real, y_real_) - tf.matmul(B_imag, y_imag_)
-                By_imag_ = tf.matmul (B_real, y_imag_) + tf.matmul(B_imag, y_real_)
-
-                # ops computed is 8mnk 
-                input_real = tf.matmul (W_real, xh_real_) - tf.matmul(W_imag, xh_imag_) + By_real_
-                input_imag = tf.matmul (W_real, xh_imag_) + tf.matmul(W_imag, xh_real_) + By_imag_
-
-                # do some normalization
-                xh_real_, xh_imag_ = shrink_complex (input_real, input_imag, theta_)
-
-                xh_ = tf.concat([xh_real_, xh_imag_], 0)
-                xhs_.append (xh_)
+                xhs_.append (xh)
 
         return xhs_
 
 
-def shrink_complex(input_real, input_imag, theta_):
+def shrink_complex(input_, theta_):
     """
     Soft thresholding function with input input_ and threshold theta_.
     """
+    input_real, input_imag = tf.math.real(input_), tf.math.imag(input_)
     norm_eps = 1e-10
     theta_ = tf.maximum(theta_, 0.0)
-    sq_in_real = tf.square(input_real)
-    sq_in_imag = tf.square(input_imag)
-    distance = tf.sqrt(sq_in_real + sq_in_imag)
+    distance = tf.sqrt(tf.square(input_real) + tf.square(input_imag))
+    numerator = tf.maximum( distance - theta_, 0.0)
+    denomenator = tf.maximum(distance, norm_eps)
+    norm_fact = tf.divide(numerator, denomenator)
 
-    numer = tf.maximum(distance - theta_, 0.0)
-    denom = tf.maximum(distance, norm_eps)
-    norm_fact = tf.divide(numer, denom)
-
-    # O_r = I_r * (max(sqrt(I_r^2 + I_i^2) - theta, 0)) / 
-    #             (max(sqrt(I_r^2 + I_i^2), norm_eps))
     output_real = input_real * norm_fact
-                           
-    # O_i = I_i * (max(sqrt(I_r^2 + I_i^2) - theta, 0)) / 
-    #             (max(sqrt(I_r^2 + I_i^2), norm_eps))
     output_imag = input_imag * norm_fact
 
-    return  output_real, output_imag
+    return  tf.complex(output_real, output_imag)
