@@ -18,6 +18,10 @@ from utils.tf import shrink
 from models.LISTA_base import LISTA_base
 import os
 
+gemm_module = tf.load_op_library('../tf-gemm.so')
+one =  tf.complex(1.0, 0.0)
+zero = tf.complex(0.0, 0.0)
+
 class LISTA_complex (LISTA_base):
 
     """
@@ -73,8 +77,10 @@ class LISTA_complex (LISTA_base):
         # print('The dimension N is', self._N, 'M is', self._M)
         B_real = (np.transpose (self._A.real) / self._scale).astype (np.float32)
         B_imag = (np.transpose (self._A.imag) / self._scale).astype (np.float32)
+        B = tf.complex(B_real, B_imag)
         W_real = (np.eye(self._N, dtype=np.float32) - (np.matmul (B_real, self._A.real) - np.matmul (B_imag, self._A.imag))).astype(np.float32)
         W_imag = (-np.matmul(B_real, self._A.imag) - np.matmul(B_imag, self._A.real)).astype(np.float32)
+        W = tf.complex(W_real, W_imag)
 
         with tf.variable_scope (self._scope, reuse=False) as vs:
             # constant
@@ -128,32 +134,44 @@ class LISTA_complex (LISTA_base):
             xh_imag_ = x0_imag_
         xhs_.append (xh_)
 
+        y = tf.complex(y_real_, y_imag_)
+        xh = tf.complex(xh_real_, xh_imag_)
+        input_ = tf.complex(0.0, 0.0)
+
         with tf.variable_scope (self._scope, reuse=True) as vs:
             for t in range (self._T):
                 B_real, B_imag, W_real, W_imag, theta_ = self.vars_in_layer [t]
+                B = tf.complex(B_real, B_imag)
+                W = tf.complex(W_real, W_imag)
+                
+                # By_real_ = tf.matmul (B_real, y_real_) - tf.matmul(B_imag, y_imag_)
+                # By_imag_ = tf.matmul (B_real, y_imag_) + tf.matmul(B_imag, y_real_)
+                gemm_module.gemm(B, y, input_, one, zero)
+                
+                # input_real = tf.matmul(W_real, xh_real_) - tf.matmul(W_imag, xh_imag_) + By_real_
+                # input_imag = tf.matmul (W_real, xh_imag_) + tf.matmul(W_imag, xh_real_) + By_imag_
+                gemm_module.gemm(W, xh, input_, one, one)
 
-                By_real_ = tf.matmul (B_real, y_real_) - tf.matmul(B_imag, y_imag_)
-                By_imag_ = tf.matmul (B_real, y_imag_) + tf.matmul(B_imag, y_real_)
+                xh = shrink_complex (input_, theta_)
+                # xh_ = tf.concat([xh_real_, xh_imag_], 0)
 
-                #
-                input_real = tf.matmul(W_real, xh_real_) - tf.matmul(W_imag, xh_imag_) + By_real_
-                input_imag = tf.matmul (W_real, xh_imag_) + tf.matmul(W_imag, xh_real_) + By_imag_
-                xh_real_, xh_imag_ = shrink_complex (input_real, input_imag, theta_)
-                xh_ = tf.concat([xh_real_, xh_imag_], 0)
-                xhs_.append (xh_)
+                xhs_.append (xh)
 
         return xhs_
 
 
-def shrink_complex(input_real, input_imag, theta_):
+def shrink_complex(input_, theta_):
     """
     Soft thresholding function with input input_ and threshold theta_.
     """
+    input_real, input_imag = tf.math.real(input_), tf.math.imag(input_)
     norm_eps = 1e-10
     theta_ = tf.maximum(theta_, 0.0)
-    output_real = tf.divide(input_real * tf.maximum( tf.sqrt(tf.square(input_real) + tf.square(input_imag)) - theta_, 0.0),
-                            tf.maximum(tf.sqrt(tf.square(input_real) + tf.square(input_imag)), norm_eps))
-    output_imag = tf.divide(
-        input_imag * tf.maximum(tf.sqrt(tf.square(input_real) + tf.square(input_imag)) - theta_, 0.0),
-        tf.maximum(tf.sqrt(tf.square(input_real) + tf.square(input_imag)), norm_eps))
-    return  output_real, output_imag
+    numerator = tf.maximum( tf.sqrt(tf.square(input_real) + tf.square(input_imag)) - theta_, 0.0)
+    denomenator = tf.maximum(tf.sqrt(tf.square(input_real) + tf.square(input_imag)), norm_eps)
+    norm_fact = tf.divide(numerator, denomenator)
+
+    output_real = input_real * norm_fact
+    output_imag = input_imag * norm_fact
+
+    return  tf.complex(output_real, output_imag)
